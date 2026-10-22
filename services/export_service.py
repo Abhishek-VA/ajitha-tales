@@ -184,6 +184,201 @@ def export_excel(orders: List[Dict], start_date: str, end_date: str) -> Optional
     return path
 
 
+def export_daily_ledger_excel(ledger_data: Dict) -> str:
+    """
+    Export comprehensive Daily Cashflow & Ledger (Inflows, Expenses, Drawer Cash) to Excel.
+    """
+    d_str = ledger_data.get("date", date.today().isoformat())
+    exports_dir = _get_exports_dir()
+
+    if not HAS_OPENPYXL:
+        # Fallback to CSV
+        csv_path = _unique_path(exports_dir, f"AjithaTailors_Ledger_{d_str}.csv")
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["AJITHA TAILORS - DAILY CASHFLOW LEDGER", d_str])
+            writer.writerow([])
+            writer.writerow(["Cash In (Collections)", ledger_data.get("cash_in", 0)])
+            writer.writerow(["Cash Out (Expenses)", ledger_data.get("cash_expenses", 0)])
+            writer.writerow(["NET CASH IN DRAWER", ledger_data.get("cash_in_hand", 0)])
+            writer.writerow(["UPI / Online In", ledger_data.get("upi_in", 0)])
+            writer.writerow(["Total Inflows", ledger_data.get("total_inflow", 0)])
+            writer.writerow(["Total Expenses", ledger_data.get("total_expenses", 0)])
+            writer.writerow(["NET CASHFLOW", ledger_data.get("net_cashflow", 0)])
+            writer.writerow([])
+            writer.writerow(["--- INFLOWS ---"])
+            writer.writerow(["Order ID", "Time", "Customer", "Mobile", "Type", "Mode", "Amount", "Notes"])
+            for tx in ledger_data.get("inflows", []):
+                writer.writerow([
+                    tx.get("order_id", ""),
+                    tx.get("created_at", "")[11:16] if tx.get("created_at") else "",
+                    tx.get("customer_name", ""),
+                    tx.get("mobile", ""),
+                    tx.get("transaction_type", "").title(),
+                    tx.get("payment_mode", ""),
+                    tx.get("amount", 0),
+                    tx.get("notes", ""),
+                ])
+            writer.writerow([])
+            writer.writerow(["--- SHOP EXPENSES ---"])
+            writer.writerow(["ID", "Time", "Category", "Mode", "Amount", "Notes"])
+            for exp in ledger_data.get("expenses", []):
+                writer.writerow([
+                    exp.get("id", ""),
+                    exp.get("created_at", "")[11:16] if exp.get("created_at") else "",
+                    exp.get("category", ""),
+                    exp.get("payment_mode", ""),
+                    exp.get("amount", 0),
+                    exp.get("notes", ""),
+                ])
+        return csv_path
+
+    filename = f"AjithaTailors_Ledger_{d_str}.xlsx"
+    path = _unique_path(exports_dir, filename)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Ledger_{d_str}"
+    ws.views.sheetView[0].showGridLines = True
+
+    thin = Side(border_style="thin", color="CCCCCC")
+    border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    title_fill = PatternFill(start_color="1A1A2E", end_color="1A1A2E", fill_type="solid")
+    kpi_hdr_fill = PatternFill(start_color="2A2A5A", end_color="2A2A5A", fill_type="solid")
+    inflow_hdr_fill = PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid")
+    expense_hdr_fill = PatternFill(start_color="B71C1C", end_color="B71C1C", fill_type="solid")
+    summary_fill = PatternFill(start_color="FFF8E7", end_color="FFF8E7", fill_type="solid")
+
+    # Banner
+    ws.merge_cells("A1:G1")
+    title_cell = ws["A1"]
+    title_cell.value = f"AJITHA TAILORS  |  DAILY CASHFLOW & DAY-BOOK LEDGER  |  {d_str}"
+    title_cell.font = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    title_cell.fill = title_fill
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+
+    # KPI summary block
+    kpis = [
+        ("💵 Cash in Drawer (In-Hand):", ledger_data.get("cash_in_hand", 0.0), "007A3D"),
+        ("📱 UPI / Online Collections:", ledger_data.get("upi_in", 0.0), "0D47A1"),
+        ("💸 Total Daily Expenses:", ledger_data.get("total_expenses", 0.0), "C62828"),
+        ("📈 Net Daily Cashflow:", ledger_data.get("net_cashflow", 0.0), "E94560"),
+    ]
+    for idx, (label, val, col_hex) in enumerate(kpis, start=3):
+        ws.cell(row=idx, column=1, value=label).font = Font(name="Calibri", size=10, bold=True)
+        c_val = ws.cell(row=idx, column=2, value=float(val))
+        c_val.font = Font(name="Calibri", size=11, bold=True, color=col_hex)
+        c_val.number_format = '#,##0.00'
+        c_val.fill = summary_fill
+        ws.cell(row=idx, column=1).border = border
+        c_val.border = border
+
+    row_cur = 8
+
+    # ── Section 1: Customer Inflows ──────────────────────────────────────────
+    ws.cell(row=row_cur, column=1, value="📥 CUSTOMER INFLOWS (ADVANCES & BALANCE SETTLEMENTS)").font = Font(name="Calibri", size=11, bold=True, color="1B5E20")
+    row_cur += 1
+
+    inflow_headers = ["Time", "Order #", "Customer Name", "Mobile", "Payment Type", "Mode", "Amount (Rs.)", "Notes"]
+    for col_i, h in enumerate(inflow_headers, start=1):
+        c = ws.cell(row=row_cur, column=col_i, value=h)
+        c.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+        c.fill = inflow_hdr_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = border
+    row_cur += 1
+
+    inflows = ledger_data.get("inflows", [])
+    if inflows:
+        for tx in inflows:
+            t_str = tx.get("created_at", "")[11:16] if tx.get("created_at") else ""
+            vals = [
+                t_str,
+                f"#{tx.get('order_id', '')}",
+                tx.get("customer_name", ""),
+                tx.get("mobile", ""),
+                tx.get("transaction_type", "").replace("_", " ").title(),
+                tx.get("payment_mode", ""),
+                float(tx.get("amount", 0.0)),
+                tx.get("notes", ""),
+            ]
+            for col_i, val in enumerate(vals, start=1):
+                c = ws.cell(row=row_cur, column=col_i, value=val)
+                c.font = Font(name="Calibri", size=9)
+                c.border = border
+                if col_i == 7:
+                    c.number_format = '#,##0.00'
+                    c.font = Font(name="Calibri", size=9, bold=True, color="1B5E20")
+            row_cur += 1
+    else:
+        c = ws.cell(row=row_cur, column=1, value="No customer inflows recorded for this date.")
+        c.font = Font(name="Calibri", size=9, italic=True, color="777777")
+        row_cur += 1
+
+    # Inflow Total
+    ws.cell(row=row_cur, column=6, value="Total Inflows:").font = Font(name="Calibri", size=10, bold=True)
+    c_tot_in = ws.cell(row=row_cur, column=7, value=float(ledger_data.get("total_inflow", 0.0)))
+    c_tot_in.font = Font(name="Calibri", size=10, bold=True, color="1B5E20")
+    c_tot_in.number_format = '#,##0.00'
+    c_tot_in.border = border
+    row_cur += 2
+
+    # ── Section 2: Shop Expenses ─────────────────────────────────────────────
+    ws.cell(row=row_cur, column=1, value="💸 SHOP EXPENSES & PAYOUTS").font = Font(name="Calibri", size=11, bold=True, color="B71C1C")
+    row_cur += 1
+
+    exp_headers = ["Time", "ID", "Expense Category", "Payment Mode", "Amount (Rs.)", "Narration / Notes"]
+    for col_i, h in enumerate(exp_headers, start=1):
+        c = ws.cell(row=row_cur, column=col_i, value=h)
+        c.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+        c.fill = expense_hdr_fill
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = border
+    row_cur += 1
+
+    expenses = ledger_data.get("expenses", [])
+    if expenses:
+        for exp in expenses:
+            t_str = exp.get("created_at", "")[11:16] if exp.get("created_at") else ""
+            vals = [
+                t_str,
+                f"EXP-{exp.get('id', '')}",
+                exp.get("category", ""),
+                exp.get("payment_mode", ""),
+                float(exp.get("amount", 0.0)),
+                exp.get("notes", ""),
+            ]
+            for col_i, val in enumerate(vals, start=1):
+                c = ws.cell(row=row_cur, column=col_i, value=val)
+                c.font = Font(name="Calibri", size=9)
+                c.border = border
+                if col_i == 5:
+                    c.number_format = '#,##0.00'
+                    c.font = Font(name="Calibri", size=9, bold=True, color="B71C1C")
+            row_cur += 1
+    else:
+        c = ws.cell(row=row_cur, column=1, value="No shop expenses recorded for this date.")
+        c.font = Font(name="Calibri", size=9, italic=True, color="777777")
+        row_cur += 1
+
+    # Expense Total
+    ws.cell(row=row_cur, column=4, value="Total Expenses:").font = Font(name="Calibri", size=10, bold=True)
+    c_tot_exp = ws.cell(row=row_cur, column=5, value=float(ledger_data.get("total_expenses", 0.0)))
+    c_tot_exp.font = Font(name="Calibri", size=10, bold=True, color="B71C1C")
+    c_tot_exp.number_format = '#,##0.00'
+    c_tot_exp.border = border
+
+    # Set column widths
+    col_widths = [12, 12, 22, 16, 18, 14, 16, 26]
+    for i, w in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    wb.save(path)
+    return path
+
+
 def open_file(path: str):
     """Open the exported file with the default application."""
     import subprocess, sys

@@ -96,11 +96,36 @@ CREATE TABLE IF NOT EXISTS order_items (
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS payment_transactions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id          INTEGER,
+    transaction_type  TEXT NOT NULL,
+    amount            REAL NOT NULL,
+    payment_mode      TEXT NOT NULL DEFAULT 'Cash',
+    transaction_date  DATE NOT NULL,
+    notes             TEXT,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS shop_expenses (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    expense_date      DATE NOT NULL,
+    category          TEXT NOT NULL,
+    amount            REAL NOT NULL,
+    payment_mode      TEXT NOT NULL DEFAULT 'Cash',
+    notes             TEXT,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_customers_mobile   ON customers(mobile);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status      ON orders(order_status);
 CREATE INDEX IF NOT EXISTS idx_orders_collection  ON orders(collection_date);
 CREATE INDEX IF NOT EXISTS idx_order_items_order  ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_trans_date         ON payment_transactions(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_trans_order        ON payment_transactions(order_id);
+CREATE INDEX IF NOT EXISTS idx_exp_date           ON shop_expenses(expense_date);
 """
 
 TRIGGER_SQL = """
@@ -121,8 +146,17 @@ def initialize_database():
         conn.executescript(TRIGGER_SQL)
         # Set schema version
         conn.execute(
-            "INSERT OR IGNORE INTO schema_version (version) VALUES (1)"
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (2)"
         )
+        # Backfill initial advances from orders if transactions table is empty
+        cur = conn.execute("SELECT COUNT(*) AS cnt FROM payment_transactions")
+        if cur.fetchone()["cnt"] == 0:
+            conn.execute("""
+                INSERT INTO payment_transactions (order_id, transaction_type, amount, payment_mode, transaction_date, notes)
+                SELECT order_id, 'advance', advance_amount, payment_mode, booking_date, 'Initial advance'
+                FROM orders
+                WHERE advance_amount > 0
+            """)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +258,15 @@ def create_order(
         )
         order_id = cur.lastrowid
         _insert_items(conn, order_id, items)
+
+        # Record advance payment transaction for cashflow tracking
+        if advance_amount > 0:
+            conn.execute(
+                """INSERT INTO payment_transactions
+                   (order_id, transaction_type, amount, payment_mode, transaction_date, notes)
+                   VALUES (?, 'advance', ?, ?, ?, 'Advance at booking')""",
+                (order_id, advance_amount, payment_mode, booking_date),
+            )
     return order_id
 
 
@@ -260,6 +303,31 @@ def update_order(
         # Delete old items (CASCADE handles this only on DELETE ORDER, so manual here)
         conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
         _insert_items(conn, order_id, items)
+
+        # Sync advance transaction with payment_transactions table
+        cur = conn.execute(
+            "SELECT id FROM payment_transactions WHERE order_id = ? AND transaction_type = 'advance'",
+            (order_id,),
+        )
+        existing_tx = cur.fetchone()
+        if advance_amount > 0:
+            if existing_tx:
+                conn.execute(
+                    """UPDATE payment_transactions
+                       SET amount = ?, payment_mode = ?, transaction_date = ?
+                       WHERE id = ?""",
+                    (advance_amount, payment_mode, booking_date, existing_tx["id"]),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO payment_transactions
+                       (order_id, transaction_type, amount, payment_mode, transaction_date, notes)
+                       VALUES (?, 'advance', ?, ?, ?, 'Advance payment')""",
+                    (order_id, advance_amount, payment_mode, booking_date),
+                )
+        elif existing_tx:
+            conn.execute("DELETE FROM payment_transactions WHERE id = ?", (existing_tx["id"],))
+
     return True
 
 
@@ -362,13 +430,23 @@ def settle_order_payment(
             ),
         )
 
+        # Record balance settlement transaction for daily cashflow tracking
+        today_iso = date.today().isoformat()
+        conn.execute(
+            """INSERT INTO payment_transactions
+               (order_id, transaction_type, amount, payment_mode, transaction_date, notes)
+               VALUES (?, 'balance_settlement', ?, ?, ?, ?)""",
+            (order_id, float(payment_amount), payment_mode, today_iso, f"Final settlement ({payment_mode})"),
+        )
+
     return get_order_by_id(order_id)
 
 
 def delete_order(order_id: int) -> bool:
-    """Delete an order and all its items (CASCADE)."""
+    """Delete an order, all its items, and its payment transactions."""
     conn = get_connection()
     with conn:
+        conn.execute("DELETE FROM payment_transactions WHERE order_id=?", (order_id,))
         conn.execute("DELETE FROM orders WHERE order_id=?", (order_id,))
     return True
 
@@ -544,3 +622,109 @@ def get_orders_for_export(start_date: str, end_date: str) -> List[Dict]:
         (start_date, end_date),
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Daily Cashflow & Expense Ledger
+# ---------------------------------------------------------------------------
+
+EXPENSE_CATEGORIES = [
+    "Materials (Thread, Needles, Zippers, Buttons)",
+    "Fabric & Lining Cloth",
+    "Tailor / Staff Wages",
+    "Machine Maintenance & Oil",
+    "Shop Rent",
+    "Electricity & Utilities",
+    "Tea & Refreshments",
+    "Packaging & Bags",
+    "Miscellaneous / Petty Cash",
+]
+
+
+def add_shop_expense(
+    expense_date: str,
+    category: str,
+    amount: float,
+    payment_mode: str = "Cash",
+    notes: str = "",
+) -> int:
+    """Record a daily shop expense / payout."""
+    conn = get_connection()
+    with conn:
+        cur = conn.execute(
+            """INSERT INTO shop_expenses
+               (expense_date, category, amount, payment_mode, notes)
+               VALUES (?, ?, ?, ?, ?)""",
+            (expense_date, category, float(amount), payment_mode, notes),
+        )
+        return cur.lastrowid
+
+
+def delete_shop_expense(expense_id: int) -> bool:
+    """Delete a shop expense record."""
+    conn = get_connection()
+    with conn:
+        conn.execute("DELETE FROM shop_expenses WHERE id = ?", (expense_id,))
+        return True
+
+
+def get_daily_ledger(target_date: Optional[str] = None) -> Dict:
+    """
+    Retrieve comprehensive cashflow ledger for a given date.
+    Calculates Cash in Drawer, UPI receipts, Card receipts, Expenses, and Net Cashflow.
+    """
+    conn = get_connection()
+    d = target_date or date.today().isoformat()
+
+    # 1. Fetch Inflows (Payments from customers)
+    cur = conn.execute(
+        """SELECT pt.id, pt.order_id, pt.transaction_type, pt.amount,
+                  pt.payment_mode, pt.transaction_date, pt.notes, pt.created_at,
+                  c.name AS customer_name, c.mobile
+           FROM payment_transactions pt
+           LEFT JOIN orders o ON pt.order_id = o.order_id
+           LEFT JOIN customers c ON o.customer_id = c.id
+           WHERE pt.transaction_date = ?
+           ORDER BY pt.created_at DESC""",
+        (d,),
+    )
+    inflows = [dict(r) for r in cur.fetchall()]
+
+    # 2. Fetch Outflows (Shop expenses)
+    cur = conn.execute(
+        """SELECT * FROM shop_expenses
+           WHERE expense_date = ?
+           ORDER BY created_at DESC""",
+        (d,),
+    )
+    expenses = [dict(r) for r in cur.fetchall()]
+
+    # 3. Compute Totals
+    cash_in = sum(float(tx["amount"]) for tx in inflows if tx["payment_mode"] == "Cash")
+    upi_in = sum(float(tx["amount"]) for tx in inflows if tx["payment_mode"] == "UPI")
+    card_in = sum(float(tx["amount"]) for tx in inflows if tx["payment_mode"] == "Card")
+    other_in = sum(float(tx["amount"]) for tx in inflows if tx["payment_mode"] not in ("Cash", "UPI", "Card"))
+    total_inflow = sum(float(tx["amount"]) for tx in inflows)
+
+    cash_expenses = sum(float(e["amount"]) for e in expenses if e["payment_mode"] == "Cash")
+    upi_expenses = sum(float(e["amount"]) for e in expenses if e["payment_mode"] == "UPI")
+    total_expenses = sum(float(e["amount"]) for e in expenses)
+
+    cash_in_hand = cash_in - cash_expenses
+    net_cashflow = total_inflow - total_expenses
+
+    return {
+        "date": d,
+        "inflows": inflows,
+        "expenses": expenses,
+        "cash_in": cash_in,
+        "upi_in": upi_in,
+        "card_in": card_in,
+        "other_in": other_in,
+        "total_inflow": total_inflow,
+        "cash_expenses": cash_expenses,
+        "upi_expenses": upi_expenses,
+        "total_expenses": total_expenses,
+        "cash_in_hand": cash_in_hand,
+        "net_cashflow": net_cashflow,
+    }

@@ -13,6 +13,7 @@ from datetime import datetime
 from ui.styles import COLORS, FONTS, apply_theme
 from ui.components.order_entry import OrderEntryPanel
 from ui.components.dashboard import DashboardPanel
+from ui.components.ledger_panel import LedgerPanel
 from database import db_manager
 
 
@@ -158,7 +159,7 @@ class AjithaTailorsApp(ctk.CTk):
         # Responsive layout mode switcher
         self._view_seg = ctk.CTkSegmentedButton(
             centre_frame,
-            values=["◫ Split View", "📝 Order Form", "📊 Dashboard"],
+            values=["◫ Split View", "📝 Order Form", "📊 Dashboard", "📖 Daily Ledger"],
             command=self._on_view_changed,
             fg_color=C["bg_input"],
             selected_color=C["primary"],
@@ -244,6 +245,18 @@ class AjithaTailorsApp(ctk.CTk):
         )
         self._dashboard.pack(fill="both", expand=True)
 
+        # ── Full pane — Daily Cashflow Ledger ────────────────────────────────
+        self._ledger_outer = ctk.CTkFrame(
+            self._main_pane,
+            fg_color=C["bg_darkest"],
+            corner_radius=0,
+        )
+        self._ledger_panel = LedgerPanel(
+            self._ledger_outer,
+            on_view_order=self._on_edit_order,
+        )
+        self._ledger_panel.pack(fill="both", expand=True)
+
         # ── Status bar ───────────────────────────────────────────────────────
         status_bar = ctk.CTkFrame(self, fg_color=C["bg_sidebar"], corner_radius=0, height=26)
         status_bar.pack(fill="x", side="bottom")
@@ -269,20 +282,31 @@ class AjithaTailorsApp(ctk.CTk):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _on_view_changed(self, mode: str):
-        """Switch between Split View, Full Order Form, and Full Dashboard."""
+        """Switch between Split View, Full Order Form, Full Dashboard, and Daily Ledger."""
         if mode == "📝 Order Form":
             self._right_outer.grid_remove()
+            self._ledger_outer.grid_remove()
             self._separator.grid_remove()
             self._left_outer.grid(row=0, column=0, columnspan=2, sticky="nsew")
             self._main_pane.grid_columnconfigure(0, weight=1, minsize=0)
             self._main_pane.grid_columnconfigure(1, weight=0, minsize=0)
         elif mode == "📊 Dashboard":
             self._left_outer.grid_remove()
+            self._ledger_outer.grid_remove()
             self._separator.grid_remove()
             self._right_outer.grid(row=0, column=0, columnspan=2, sticky="nsew")
             self._main_pane.grid_columnconfigure(0, weight=1, minsize=0)
             self._main_pane.grid_columnconfigure(1, weight=0, minsize=0)
+        elif mode == "📖 Daily Ledger":
+            self._left_outer.grid_remove()
+            self._right_outer.grid_remove()
+            self._separator.grid_remove()
+            self._ledger_panel.refresh()
+            self._ledger_outer.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self._main_pane.grid_columnconfigure(0, weight=1, minsize=0)
+            self._main_pane.grid_columnconfigure(1, weight=0, minsize=0)
         else:  # "◫ Split View"
+            self._ledger_outer.grid_remove()
             self._left_outer.grid(row=0, column=0, columnspan=1, sticky="nsew")
             self._separator.grid(row=0, column=0, sticky="nse")
             self._right_outer.grid(row=0, column=1, columnspan=1, sticky="nsew")
@@ -300,18 +324,19 @@ class AjithaTailorsApp(ctk.CTk):
     def _on_order_saved(self, order_id: int):
         """Called when the order entry panel saves/updates an order."""
         self._dashboard.refresh()
+        self._ledger_panel.refresh()
         self._set_status(f"  ✓  Order #{order_id} saved successfully")
 
     def _on_edit_order(self, order_id: int):
-        """Called when dashboard requests an order to be loaded for editing."""
-        if self._view_seg.get() == "📊 Dashboard":
+        """Called when dashboard or ledger requests an order to be loaded for editing."""
+        if self._view_seg.get() in ("📊 Dashboard", "📖 Daily Ledger"):
             self._view_seg.set("◫ Split View")
             self._on_view_changed("◫ Split View")
         self._order_entry.load_order_for_edit(order_id)
         self._set_status(f"  ✏️  Editing Order #{order_id}")
 
     def _new_order(self):
-        if self._view_seg.get() == "📊 Dashboard":
+        if self._view_seg.get() in ("📊 Dashboard", "📖 Daily Ledger"):
             self._view_seg.set("◫ Split View")
             self._on_view_changed("◫ Split View")
         self._order_entry.reset_form()
@@ -319,7 +344,8 @@ class AjithaTailorsApp(ctk.CTk):
 
     def _refresh_all(self):
         self._dashboard.refresh()
-        self._set_status("  ↺  Dashboard refreshed")
+        self._ledger_panel.refresh()
+        self._set_status("  ↺  Dashboard & Ledger refreshed")
 
     def _set_status(self, text: str):
         self._status_label.configure(text=text)

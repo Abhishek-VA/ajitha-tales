@@ -12,12 +12,16 @@ Runs 100% locally with no internet connection required. Compilable to a standalo
 | 👤 **Customer Auto-Lookup** | Type a 10-digit mobile → auto-fills name, address, past data |
 | 🧵 **Multi-Item Orders** | Add multiple garments per order with individual rates |
 | 📐 **Dynamic Measurements** | Garment-specific fields (Blouse, Kurti, Salwar, Gown, Shirt…) |
-| 🖨️ **PDF Invoice** | Professional branded invoice, auto-opens on save |
+| 🖨️ **PDF Invoice** | Professional branded invoice, auto-opens on save, no clipping |
+| 💰 **Balance Settlement** | One-click payment modal with Cash/UPI/Card & instant receipt |
+| 📖 **Daily Cashflow Ledger** | Track Cash in Drawer, UPI receipts, expenses & net cashflow |
+| 💸 **Shop Expense Manager** | Record tailor wages, threads, needles, repairs with drawer sync |
+| 📅 **Visual Calendar Picker** | Date picker popup with quick presets (+3d, +5d, +7d, +10d, +15d) |
 | ✏️ **Full Order Editing** | Double-click any order to load & edit in the form |
 | 🔍 **Omni-Search** | Filter by name, mobile, or order ID in real time |
 | 📅 **Date Filters** | Due Today / Due Tomorrow / This Week / Overdue |
 | 🏷️ **Status Transitions** | Right-click → Quick status change |
-| 📊 **Excel/CSV Export** | Full order export with formatting |
+| 📊 **Excel/CSV Export** | Orders & Daily Day-Book ledger export to formatted Excel |
 | 💰 **Billing Math** | Auto-calculates Total, Advance, Balance Due |
 | 🗄️ **SQLite Database** | Robust local database with WAL mode |
 | 📦 **Portable EXE** | PyInstaller-based standalone Windows build |
