@@ -307,6 +307,64 @@ def update_payment_status(order_id: int, payment_status: str) -> bool:
     return True
 
 
+def settle_order_payment(
+    order_id: int,
+    payment_amount: float,
+    payment_mode: str = "Cash",
+    mark_delivered: bool = False,
+    notes_append: str = "",
+) -> Dict:
+    """
+    Record final payment / balance settlement for an order.
+    Adds payment_amount to advance_amount (total collected),
+    recalculates balance_amount, sets payment_status ('Paid' or 'Partial'),
+    optionally marks order_status as 'Delivered', and updates notes with a receipt log.
+    Returns the updated order dict.
+    """
+    conn = get_connection()
+    with conn:
+        cur = conn.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,))
+        order = cur.fetchone()
+        if not order:
+            raise ValueError(f"Order #{order_id} not found.")
+
+        total = float(order["total_amount"])
+        current_advance = float(order["advance_amount"])
+        new_advance = min(total, current_advance + float(payment_amount))
+        new_balance = max(0.0, total - new_advance)
+
+        if new_balance <= 0.01:
+            new_pay_status = "Paid"
+            new_balance = 0.0
+        else:
+            new_pay_status = "Partial"
+
+        new_order_status = "Delivered" if mark_delivered else order["order_status"]
+
+        now_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
+        pay_note = f"[Settlement: Paid ₹{payment_amount:,.2f} via {payment_mode} on {now_str}]"
+        existing_notes = order["notes"] or ""
+        combined_notes = (existing_notes + "\n" + pay_note).strip()
+        if notes_append:
+            combined_notes += f" ({notes_append})"
+
+        conn.execute(
+            """UPDATE orders
+               SET advance_amount = ?, balance_amount = ?,
+                   payment_status = ?, order_status = ?,
+                   payment_mode = ?, notes = ?
+               WHERE order_id = ?""",
+            (
+                new_advance, new_balance,
+                new_pay_status, new_order_status,
+                payment_mode, combined_notes,
+                order_id,
+            ),
+        )
+
+    return get_order_by_id(order_id)
+
+
 def delete_order(order_id: int) -> bool:
     """Delete an order and all its items (CASCADE)."""
     conn = get_connection()

@@ -227,12 +227,44 @@ class DashboardPanel(ctk.CTkFrame):
         )
         self._result_count_label.pack(side="left", padx=14, pady=8)
 
-        ctk.CTkLabel(
+        # Quick actions on selected order
+        ctk.CTkButton(
             col_header,
-            text="💡 Double-click to edit  |  Right-click for options",
-            font=F["label"],
-            text_color=C["text_muted"],
-        ).pack(side="right", padx=14)
+            text="💰 Settle Balance",
+            fg_color=C["btn_success"],
+            hover_color="#1E8449",
+            text_color="#FFFFFF",
+            font=F["body_xs"],
+            height=26,
+            command=self._ctx_settle,
+            corner_radius=4,
+        ).pack(side="right", padx=6, pady=4)
+
+        ctk.CTkButton(
+            col_header,
+            text="✏️ Edit",
+            fg_color=C["btn_neutral"],
+            hover_color=C["border_light"],
+            text_color=C["text_secondary"],
+            font=F["body_xs"],
+            height=26,
+            width=50,
+            command=self._ctx_edit,
+            corner_radius=4,
+        ).pack(side="right", padx=2, pady=4)
+
+        ctk.CTkButton(
+            col_header,
+            text="🖨️ Bill",
+            fg_color=C["btn_neutral"],
+            hover_color=C["border_light"],
+            text_color=C["text_secondary"],
+            font=F["body_xs"],
+            height=26,
+            width=50,
+            command=self._ctx_print,
+            corner_radius=4,
+        ).pack(side="right", padx=2, pady=4)
 
         # Treeview
         tree_container = tk.Frame(table_frame, bg=C["bg_card"])
@@ -289,6 +321,7 @@ class DashboardPanel(ctk.CTkFrame):
                                  activebackground=C["primary"],
                                  activeforeground="#FFFFFF",
                                  font=("Segoe UI", 10))
+        self._ctx_menu.add_command(label="💰  Settle Payment / Collect Balance", command=self._ctx_settle)
         self._ctx_menu.add_command(label="✏️  Edit Order",         command=self._ctx_edit)
         self._ctx_menu.add_separator()
         self._ctx_menu.add_command(label="📋  Mark: Pending",      command=lambda: self._ctx_status("Pending"))
@@ -436,6 +469,22 @@ class DashboardPanel(ctk.CTkFrame):
         oid = self._selected_order_id()
         if oid and self.on_edit_order:
             self.on_edit_order(oid)
+
+    def _ctx_settle(self):
+        oid = self._selected_order_id()
+        if not oid:
+            messagebox.showinfo("Select Order", "Please select an order from the table to settle payment.", parent=self.winfo_toplevel())
+            return
+        order = db_manager.get_order_by_id(oid)
+        if not order:
+            return
+
+        from ui.components.payment_modal import PaymentModal
+
+        def on_settled(updated_order):
+            self.refresh()
+
+        PaymentModal(self.winfo_toplevel(), order=order, on_settled=on_settled)
 
     def _ctx_status(self, status: str):
         oid = self._selected_order_id()

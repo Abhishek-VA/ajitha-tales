@@ -1,7 +1,8 @@
 """
 ui/components/order_entry.py
 Left-pane: Customer info + multi-item cart + billing summary.
-Supports both Create and Edit modes with full form pre-fill.
+Supports Create and Edit modes, visual calendar pickers, inline measurement editing,
+cart item editing, and one-click balance settlements.
 """
 
 import tkinter as tk
@@ -13,6 +14,7 @@ import json
 
 from ui.styles import COLORS, FONTS, GARMENT_TYPES, PAYMENT_STATUSES, PAYMENT_MODES, ORDER_STATUSES
 from ui.components.measurement_modal import MeasurementModal
+from ui.components.calendar_picker import CalendarPickerModal
 from database import db_manager
 
 
@@ -26,16 +28,17 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         super().__init__(
             parent,
             fg_color=COLORS["bg_dark"],
-            scrollbar_button_color=COLORS["primary"],
-            scrollbar_button_hover_color=COLORS["primary_dark"],
+            scrollbar_button_color=COLORS["border_light"],
+            scrollbar_button_hover_color=COLORS["primary"],
             **kwargs,
         )
         self.on_order_saved = on_order_saved
 
         # State
-        self._edit_order_id: Optional[int] = None   # None = create mode
-        self._cart_items: List[Dict] = []            # In-memory cart
+        self._edit_order_id: Optional[int] = None      # None = create mode
+        self._cart_items: List[Dict] = []               # In-memory cart
         self._customer_id: Optional[int] = None
+        self._editing_cart_index: Optional[int] = None  # None = adding new, int = editing cart item
 
         self._build_ui()
 
@@ -45,10 +48,10 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
 
     def _build_ui(self):
         C, F = COLORS, FONTS
-        pad = {"padx": 14, "pady": 6}
+        pad = {"padx": 10, "pady": 5}
 
         # ── Panel title ──────────────────────────────────────────────────────
-        title_frame = ctk.CTkFrame(self, fg_color=C["bg_medium"], corner_radius=10)
+        title_frame = ctk.CTkFrame(self, fg_color=C["bg_medium"], corner_radius=8)
         title_frame.pack(fill="x", **pad)
 
         self._mode_label = ctk.CTkLabel(
@@ -57,25 +60,25 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             font=F["heading_lg"],
             text_color=C["primary"],
         )
-        self._mode_label.pack(side="left", padx=14, pady=12)
+        self._mode_label.pack(side="left", padx=12, pady=10)
 
         self._order_badge = ctk.CTkLabel(
             title_frame,
             text="",
-            font=F["body_sm"],
+            font=F["heading_sm"],
             text_color=C["gold"],
         )
-        self._order_badge.pack(side="right", padx=14)
+        self._order_badge.pack(side="right", padx=12)
 
         # ── Customer section ─────────────────────────────────────────────────
         self._section("👤  Customer Information")
 
-        cust_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        cust_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         cust_frame.pack(fill="x", **pad)
 
         # Mobile + auto-lookup
         mob_row = ctk.CTkFrame(cust_frame, fg_color="transparent")
-        mob_row.pack(fill="x", padx=12, pady=(10, 4))
+        mob_row.pack(fill="x", padx=10, pady=(8, 2))
 
         ctk.CTkLabel(mob_row, text="Mobile *", font=F["label_bold"],
                      text_color=C["text_secondary"]).pack(side="left")
@@ -86,11 +89,11 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._mobile_var.trace_add("write", self._on_mobile_changed)
         self._mobile_entry = ctk.CTkEntry(
             cust_frame, textvariable=self._mobile_var,
-            height=38, fg_color=C["bg_input"], border_color=C["border"],
+            height=36, fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_md"],
             placeholder_text="10-digit mobile number",
         )
-        self._mobile_entry.pack(fill="x", padx=12, pady=(0, 8))
+        self._mobile_entry.pack(fill="x", padx=10, pady=(0, 6))
 
         # Name
         self._labeled_entry(cust_frame, "Customer Name *", "_name_entry", "Full name")
@@ -98,34 +101,34 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._labeled_entry(cust_frame, "Alternate Mobile", "_alt_mobile_entry", "Optional")
         # Address
         ctk.CTkLabel(cust_frame, text="Address", font=F["label_bold"],
-                     text_color=C["text_secondary"]).pack(anchor="w", padx=12, pady=(4, 2))
+                     text_color=C["text_secondary"]).pack(anchor="w", padx=10, pady=(4, 2))
         self._address_text = ctk.CTkTextbox(
-            cust_frame, height=52, fg_color=C["bg_input"], border_color=C["border"],
+            cust_frame, height=48, fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_sm"], corner_radius=6,
         )
-        self._address_text.pack(fill="x", padx=12, pady=(0, 12))
+        self._address_text.pack(fill="x", padx=10, pady=(0, 10))
 
-        # ── Dates ────────────────────────────────────────────────────────────
+        # ── Dates (with Calendar picker buttons) ──────────────────────────────
         self._section("📅  Dates")
 
-        dates_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        dates_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         dates_frame.pack(fill="x", **pad)
         dates_frame.grid_columnconfigure((0, 1), weight=1)
 
         today_str = date.today().strftime("%Y-%m-%d")
 
-        self._booking_entry = self._date_field(dates_frame, "Booking Date *", 0, today_str)
-        self._collection_entry = self._date_field(dates_frame, "Delivery Date *", 1, "")
+        self._booking_entry = self._date_field(dates_frame, "Booking Date *", 0, today_str, is_delivery=False)
+        self._collection_entry = self._date_field(dates_frame, "Delivery Date *", 1, "", is_delivery=True)
 
-        # ── Items cart ───────────────────────────────────────────────────────
+        # ── Items form ───────────────────────────────────────────────────────
         self._section("🧵  Order Items")
 
-        item_form = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        item_form = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         item_form.pack(fill="x", **pad)
 
         # Garment type
         ctk.CTkLabel(item_form, text="Garment Type", font=F["label_bold"],
-                     text_color=C["text_secondary"]).pack(anchor="w", padx=12, pady=(10, 2))
+                     text_color=C["text_secondary"]).pack(anchor="w", padx=10, pady=(8, 2))
         self._garment_var = tk.StringVar(value=GARMENT_TYPES[0])
         self._garment_menu = ctk.CTkOptionMenu(
             item_form,
@@ -138,14 +141,15 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             dropdown_fg_color=C["bg_medium"],
             dropdown_text_color=C["text_primary"],
             font=F["body_md"],
-            height=36,
+            height=34,
         )
-        self._garment_menu.pack(fill="x", padx=12, pady=(0, 8))
+        self._garment_menu.pack(fill="x", padx=10, pady=(0, 6))
 
         # Qty + Rate
         qty_rate_row = ctk.CTkFrame(item_form, fg_color="transparent")
-        qty_rate_row.pack(fill="x", padx=12, pady=(0, 8))
-        qty_rate_row.grid_columnconfigure((0, 1), weight=1)
+        qty_rate_row.pack(fill="x", padx=10, pady=(0, 6))
+        qty_rate_row.grid_columnconfigure(0, weight=0)
+        qty_rate_row.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(qty_rate_row, text="Qty", font=F["label_bold"],
                      text_color=C["text_secondary"]).grid(row=0, column=0, sticky="w")
@@ -155,16 +159,16 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._qty_var = tk.StringVar(value="1")
         self._qty_entry = ctk.CTkEntry(
             qty_rate_row, textvariable=self._qty_var,
-            height=36, fg_color=C["bg_input"], border_color=C["border"],
-            text_color=C["text_primary"], font=F["body_md"], width=80,
+            height=34, fg_color=C["bg_input"], border_color=C["border"],
+            text_color=C["text_primary"], font=F["body_md"], width=70,
         )
-        self._qty_entry.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        self._qty_entry.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
         self._rate_var = tk.StringVar()
         self._rate_var.trace_add("write", self._recalculate)
         self._rate_entry = ctk.CTkEntry(
             qty_rate_row, textvariable=self._rate_var,
-            height=36, fg_color=C["bg_input"], border_color=C["border"],
+            height=34, fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_md"],
             placeholder_text="0.00",
         )
@@ -180,65 +184,97 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             hover_color=C["border_light"],
             text_color=C["text_secondary"],
             font=F["body_sm"],
-            height=34,
+            height=32,
             command=self._open_measurement_modal,
             corner_radius=6,
         )
-        self._meas_btn.pack(fill="x", padx=12, pady=(0, 4))
+        self._meas_btn.pack(fill="x", padx=10, pady=(0, 4))
 
         self._meas_indicator = ctk.CTkLabel(
             item_form, text="", font=F["label"],
             text_color=C["status_delivered"],
         )
-        self._meas_indicator.pack(anchor="w", padx=12, pady=(0, 4))
+        self._meas_indicator.pack(anchor="w", padx=10, pady=(0, 4))
 
-        # Add item button
-        ctk.CTkButton(
-            item_form,
+        # Add / Update item button row
+        item_btn_row = ctk.CTkFrame(item_form, fg_color="transparent")
+        item_btn_row.pack(fill="x", padx=10, pady=(4, 10))
+
+        self._add_item_btn = ctk.CTkButton(
+            item_btn_row,
             text="  ➕  Add Item to Order",
             fg_color=C["primary"],
             hover_color=C["primary_dark"],
             text_color="#FFFFFF",
             font=F["heading_sm"],
-            height=40,
-            command=self._add_item_to_cart,
-            corner_radius=8,
-        ).pack(fill="x", padx=12, pady=(4, 12))
+            height=38,
+            command=self._add_or_update_item,
+            corner_radius=6,
+        )
+        self._add_item_btn.pack(side="left", fill="x", expand=True)
+
+        self._cancel_item_edit_btn = ctk.CTkButton(
+            item_btn_row,
+            text="✕ Cancel Edit",
+            fg_color=C["btn_neutral"],
+            hover_color=C["border_light"],
+            text_color=C["text_muted"],
+            font=F["body_xs"],
+            height=38,
+            width=90,
+            command=self._cancel_item_edit,
+            corner_radius=6,
+        )
+        # Not packed initially, only when editing a cart item
 
         # ── Cart display ─────────────────────────────────────────────────────
         self._section("🛒  Cart Summary")
-        self._cart_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        self._cart_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         self._cart_frame.pack(fill="x", **pad)
         self._refresh_cart_display()
 
         # ── Payment section ──────────────────────────────────────────────────
         self._section("💳  Payment & Status")
 
-        pay_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        pay_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         pay_frame.pack(fill="x", **pad)
 
         # Advance
         ctk.CTkLabel(pay_frame, text="Advance Received (₹)", font=F["label_bold"],
-                     text_color=C["text_secondary"]).pack(anchor="w", padx=12, pady=(10, 2))
+                     text_color=C["text_secondary"]).pack(anchor="w", padx=10, pady=(8, 2))
         self._advance_var = tk.StringVar(value="0")
         self._advance_var.trace_add("write", self._recalculate)
         self._advance_entry = ctk.CTkEntry(
             pay_frame, textvariable=self._advance_var,
-            height=38, fg_color=C["bg_input"], border_color=C["border"],
+            height=36, fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_md"],
             placeholder_text="0.00",
         )
-        self._advance_entry.pack(fill="x", padx=12, pady=(0, 8))
+        self._advance_entry.pack(fill="x", padx=10, pady=(0, 6))
+
+        # Quick Settle Full Balance Button (visible when editing an order with remaining balance)
+        self._quick_settle_btn = ctk.CTkButton(
+            pay_frame,
+            text="  💰  Settle Full Balance Now",
+            fg_color=C["btn_success"],
+            hover_color="#1E8449",
+            text_color="#FFFFFF",
+            font=F["body_sm"],
+            height=32,
+            command=self._on_quick_settle_clicked,
+            corner_radius=6,
+        )
+        # Not packed by default
 
         # Payment mode + status
         row2 = ctk.CTkFrame(pay_frame, fg_color="transparent")
-        row2.pack(fill="x", padx=12, pady=(0, 8))
+        row2.pack(fill="x", padx=10, pady=(0, 6))
         row2.grid_columnconfigure((0, 1), weight=1)
 
         ctk.CTkLabel(row2, text="Payment Mode", font=F["label_bold"],
                      text_color=C["text_secondary"]).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(row2, text="Order Status", font=F["label_bold"],
-                     text_color=C["text_secondary"]).grid(row=0, column=1, sticky="w", padx=(10, 0))
+                     text_color=C["text_secondary"]).grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         self._pay_mode_var = tk.StringVar(value="Cash")
         ctk.CTkOptionMenu(
@@ -249,7 +285,7 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             text_color=C["text_primary"],
             dropdown_fg_color=C["bg_medium"],
             dropdown_text_color=C["text_primary"],
-            font=F["body_sm"], height=34,
+            font=F["body_sm"], height=32,
         ).grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
         self._order_status_var = tk.StringVar(value="Pending")
@@ -261,22 +297,22 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             text_color=C["text_primary"],
             dropdown_fg_color=C["bg_medium"],
             dropdown_text_color=C["text_primary"],
-            font=F["body_sm"], height=34,
-        ).grid(row=1, column=1, sticky="ew", pady=(2, 0), padx=(10, 0))
+            font=F["body_sm"], height=32,
+        ).grid(row=1, column=1, sticky="ew", pady=(2, 0), padx=(8, 0))
 
         # Notes
         ctk.CTkLabel(pay_frame, text="Order Notes", font=F["label_bold"],
-                     text_color=C["text_secondary"]).pack(anchor="w", padx=12, pady=(8, 2))
+                     text_color=C["text_secondary"]).pack(anchor="w", padx=10, pady=(6, 2))
         self._notes_text = ctk.CTkTextbox(
-            pay_frame, height=52,
+            pay_frame, height=48,
             fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_sm"], corner_radius=6,
         )
-        self._notes_text.pack(fill="x", padx=12, pady=(0, 12))
+        self._notes_text.pack(fill="x", padx=10, pady=(0, 10))
 
         # ── Billing summary ──────────────────────────────────────────────────
         self._section("💰  Billing Summary")
-        summary_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=10)
+        summary_frame = ctk.CTkFrame(self, fg_color=C["bg_card"], corner_radius=8)
         summary_frame.pack(fill="x", **pad)
 
         self._total_label = self._billing_row(summary_frame, "Total Amount", "₹ 0.00", C["text_primary"])
@@ -285,7 +321,7 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
 
         # ── Action buttons ───────────────────────────────────────────────────
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=14, pady=(10, 16))
+        btn_frame.pack(fill="x", padx=10, pady=(8, 14))
 
         self._save_btn = ctk.CTkButton(
             btn_frame,
@@ -294,22 +330,22 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             hover_color=C["primary_dark"],
             text_color="#FFFFFF",
             font=F["heading_md"],
-            height=48,
+            height=44,
             command=self._on_save,
-            corner_radius=10,
+            corner_radius=8,
         )
         self._save_btn.pack(fill="x", pady=(0, 6))
 
         self._cancel_btn = ctk.CTkButton(
             btn_frame,
-            text="  ✕  Cancel / Reset",
+            text="  ✕  Cancel / Reset Form",
             fg_color=C["btn_neutral"],
             hover_color=C["border_light"],
             text_color=C["text_secondary"],
             font=F["body_md"],
-            height=38,
+            height=34,
             command=self.reset_form,
-            corner_radius=8,
+            corner_radius=6,
         )
         self._cancel_btn.pack(fill="x")
 
@@ -319,7 +355,7 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
 
     def _section(self, title: str):
         frame = ctk.CTkFrame(self, fg_color="transparent")
-        frame.pack(fill="x", padx=14, pady=(10, 0))
+        frame.pack(fill="x", padx=10, pady=(8, 0))
         ctk.CTkLabel(frame, text=title, font=FONTS["heading_sm"],
                      text_color=COLORS["gold"]).pack(side="left")
         ctk.CTkFrame(frame, fg_color=COLORS["border"], height=1).pack(
@@ -329,50 +365,77 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
     def _labeled_entry(self, parent, label: str, attr: str, placeholder: str) -> ctk.CTkEntry:
         C, F = COLORS, FONTS
         ctk.CTkLabel(parent, text=label, font=F["label_bold"],
-                     text_color=C["text_secondary"]).pack(anchor="w", padx=12, pady=(6, 2))
+                     text_color=C["text_secondary"]).pack(anchor="w", padx=10, pady=(4, 2))
         entry = ctk.CTkEntry(
-            parent, height=36,
+            parent, height=34,
             fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_md"],
             placeholder_text=placeholder,
         )
-        entry.pack(fill="x", padx=12, pady=(0, 6))
+        entry.pack(fill="x", padx=10, pady=(0, 6))
         setattr(self, attr, entry)
         return entry
 
-    def _date_field(self, parent, label: str, col: int, default: str) -> ctk.CTkEntry:
+    def _date_field(self, parent, label: str, col: int, default: str, is_delivery: bool = False) -> ctk.CTkEntry:
         C, F = COLORS, FONTS
         cell = ctk.CTkFrame(parent, fg_color="transparent")
-        cell.grid(row=0, column=col, padx=12 if col == 0 else 6, pady=10, sticky="ew")
+        cell.grid(row=0, column=col, padx=8, pady=8, sticky="nsew")
+
         ctk.CTkLabel(cell, text=label, font=F["label_bold"],
                      text_color=C["text_secondary"]).pack(anchor="w", pady=(0, 2))
+
+        row = ctk.CTkFrame(cell, fg_color="transparent")
+        row.pack(fill="x")
+
         entry = ctk.CTkEntry(
-            cell, height=36,
+            row, height=34,
             fg_color=C["bg_input"], border_color=C["border"],
             text_color=C["text_primary"], font=F["body_md"],
             placeholder_text="YYYY-MM-DD",
         )
-        entry.pack(fill="x")
+        entry.pack(side="left", fill="x", expand=True)
+
+        cal_btn = ctk.CTkButton(
+            row, text="📅", width=34, height=34,
+            fg_color=C["bg_input"], hover_color=C["primary_dark"],
+            text_color=C["gold"], font=("Segoe UI", 12),
+            corner_radius=6,
+            command=lambda: self._open_calendar(entry, label, is_delivery),
+        )
+        cal_btn.pack(side="left", padx=(4, 0))
+
         if default:
             entry.insert(0, default)
+
+        entry.bind("<Double-1>", lambda _: self._open_calendar(entry, label, is_delivery))
         return entry
+
+    def _open_calendar(self, entry: ctk.CTkEntry, label: str, is_delivery: bool):
+        clean_title = label.replace("*", "").strip()
+        CalendarPickerModal(
+            self.winfo_toplevel(),
+            title=f"Pick {clean_title}",
+            initial_date=entry.get(),
+            is_delivery=is_delivery,
+            callback=lambda val: (entry.delete(0, "end"), entry.insert(0, val)),
+        )
 
     def _billing_row(self, parent, label: str, value: str, color: str,
                      big: bool = False) -> ctk.CTkLabel:
         C, F = COLORS, FONTS
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=14, pady=4)
+        row.pack(fill="x", padx=12, pady=3)
         ctk.CTkLabel(row, text=label,
                      font=F["heading_sm"] if big else F["body_md"],
                      text_color=C["text_secondary"]).pack(side="left")
         lbl = ctk.CTkLabel(row, text=value,
-                           font=F["heading_md"] if big else F["body_md"],
-                           text_color=color)
+                            font=F["heading_md"] if big else F["body_md"],
+                            text_color=color)
         lbl.pack(side="right")
         return lbl
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Event handlers
+    # Event handlers & Cart Logic
     # ─────────────────────────────────────────────────────────────────────────
 
     def _on_mobile_changed(self, *_):
@@ -411,6 +474,10 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
                 )
             else:
                 self._meas_indicator.configure(text="")
+                self._meas_btn.configure(
+                    text="  📐  Add Measurements & Design Notes",
+                    fg_color=COLORS["btn_neutral"],
+                )
 
         MeasurementModal(
             self.winfo_toplevel(),
@@ -420,17 +487,17 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             callback=on_result,
         )
 
-    def _add_item_to_cart(self):
+    def _add_or_update_item(self):
         garment = self._garment_var.get()
         try:
             qty = int(self._qty_var.get() or 1)
             rate = float(self._rate_var.get() or 0)
         except ValueError:
-            messagebox.showerror("Invalid Input", "Quantity and Rate must be numbers.", parent=self.winfo_toplevel())
+            messagebox.showerror("Invalid Input", "Quantity and Rate must be valid numbers.", parent=self.winfo_toplevel())
             return
 
         if rate <= 0:
-            messagebox.showwarning("Missing Rate", "Please enter a rate for this item.", parent=self.winfo_toplevel())
+            messagebox.showwarning("Missing Rate", "Please enter a valid rate for this item.", parent=self.winfo_toplevel())
             return
 
         item = {
@@ -441,7 +508,21 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             "measurements_json": json.dumps(self._current_measurements),
             "design_instructions": self._current_design,
         }
-        self._cart_items.append(item)
+
+        if self._editing_cart_index is not None and 0 <= self._editing_cart_index < len(self._cart_items):
+            # Update existing cart item
+            self._cart_items[self._editing_cart_index] = item
+            self._editing_cart_index = None
+            self._add_item_btn.configure(
+                text="  ➕  Add Item to Order",
+                fg_color=COLORS["primary"],
+                hover_color=COLORS["primary_dark"],
+                text_color="#FFFFFF",
+            )
+            self._cancel_item_edit_btn.pack_forget()
+        else:
+            # Add new item
+            self._cart_items.append(item)
 
         # Reset item fields
         self._qty_var.set("1")
@@ -457,80 +538,192 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._refresh_cart_display()
         self._recalculate()
 
+    def _cancel_item_edit(self):
+        self._editing_cart_index = None
+        self._qty_var.set("1")
+        self._rate_var.set("")
+        self._current_measurements = {}
+        self._current_design = ""
+        self._meas_indicator.configure(text="")
+        self._meas_btn.configure(
+            text="  📐  Add Measurements & Design Notes",
+            fg_color=COLORS["btn_neutral"],
+        )
+        self._add_item_btn.configure(
+            text="  ➕  Add Item to Order",
+            fg_color=COLORS["primary"],
+            hover_color=COLORS["primary_dark"],
+            text_color="#FFFFFF",
+        )
+        self._cancel_item_edit_btn.pack_forget()
+
+    def _start_edit_cart_item(self, idx: int):
+        if not (0 <= idx < len(self._cart_items)):
+            return
+        self._editing_cart_index = idx
+        item = self._cart_items[idx]
+
+        self._garment_var.set(item.get("garment_type", GARMENT_TYPES[0]))
+        self._qty_var.set(str(item.get("quantity", 1)))
+        self._rate_var.set(str(item.get("item_rate", "")))
+        self._current_measurements = item.get("measurements", {}).copy()
+        self._current_design = item.get("design_instructions", "")
+
+        filled = len(self._current_measurements)
+        if filled:
+            self._meas_indicator.configure(text=f"✓  {filled} measurement(s) saved")
+            self._meas_btn.configure(text="  📐  Edit Measurements & Notes", fg_color=COLORS["bg_medium"])
+        else:
+            self._meas_indicator.configure(text="")
+            self._meas_btn.configure(text="  📐  Add Measurements & Notes", fg_color=COLORS["btn_neutral"])
+
+        self._add_item_btn.configure(
+            text=f"  ✓  Update Item #{idx + 1}",
+            fg_color=COLORS["gold"],
+            hover_color=COLORS["gold_light"],
+            text_color="#1A1A2E",
+        )
+        self._cancel_item_edit_btn.pack(side="left", padx=(6, 0), fill="x", expand=True)
+
+    def _edit_cart_item_measurements(self, idx: int):
+        """Open measurement modal directly for a specific item in the cart."""
+        if not (0 <= idx < len(self._cart_items)):
+            return
+        item = self._cart_items[idx]
+        garment = item.get("garment_type", "Custom")
+
+        def on_result(result: Dict):
+            item["measurements"] = result.get("measurements", {})
+            item["measurements_json"] = json.dumps(item["measurements"])
+            item["design_instructions"] = result.get("design_instructions", "")
+            self._refresh_cart_display()
+
+        MeasurementModal(
+            self.winfo_toplevel(),
+            garment_type=garment,
+            existing_measurements=item.get("measurements", {}),
+            existing_design=item.get("design_instructions", ""),
+            callback=on_result,
+        )
+
     def _remove_cart_item(self, idx: int):
         if 0 <= idx < len(self._cart_items):
             self._cart_items.pop(idx)
+            if self._editing_cart_index == idx:
+                self._cancel_item_edit()
         self._refresh_cart_display()
         self._recalculate()
 
     def _refresh_cart_display(self):
         C, F = COLORS, FONTS
-        # Clear
+        # Clear previous rows
         for widget in self._cart_frame.winfo_children():
             widget.destroy()
 
         if not self._cart_items:
             ctk.CTkLabel(
                 self._cart_frame,
-                text="  No items added yet.  Use the form above to add garments.",
+                text="  No items added yet. Use the form above to add garments.",
                 font=F["body_sm"],
                 text_color=C["text_muted"],
-            ).pack(pady=14)
+            ).pack(pady=12)
             return
 
-        # Header
+        # Header Row
         hdr = ctk.CTkFrame(self._cart_frame, fg_color=C["table_header"], corner_radius=6)
-        hdr.pack(fill="x", padx=10, pady=(10, 4))
-        for col, (text, w) in enumerate([
-            ("#", 30), ("Garment", 0), ("Qty", 40), ("Rate", 70), ("Total", 70), ("", 34)
-        ]):
-            ctk.CTkLabel(hdr, text=text, font=F["label_bold"],
-                         text_color=C["text_primary"],
-                         width=w if w else 0).grid(
-                row=0, column=col,
-                padx=6, pady=6,
-                sticky="w" if col == 1 else "e" if col in (3, 4) else "w"
-            )
+        hdr.pack(fill="x", padx=6, pady=(6, 2))
         hdr.grid_columnconfigure(1, weight=1)
 
-        # Rows
+        ctk.CTkLabel(hdr, text="#", font=F["label_bold"], text_color=C["text_primary"], width=24).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        ctk.CTkLabel(hdr, text="Garment Details", font=F["label_bold"], text_color=C["text_primary"]).grid(row=0, column=1, padx=4, pady=4, sticky="w")
+        ctk.CTkLabel(hdr, text="Qty", font=F["label_bold"], text_color=C["text_primary"], width=32).grid(row=0, column=2, padx=4, pady=4)
+        ctk.CTkLabel(hdr, text="Rate", font=F["label_bold"], text_color=C["text_primary"], width=55).grid(row=0, column=3, padx=4, pady=4, sticky="e")
+        ctk.CTkLabel(hdr, text="Total", font=F["label_bold"], text_color=C["text_primary"], width=55).grid(row=0, column=4, padx=4, pady=4, sticky="e")
+        ctk.CTkLabel(hdr, text="Actions", font=F["label_bold"], text_color=C["text_primary"], width=85).grid(row=0, column=5, padx=4, pady=4)
+
+        # Cart Rows
         for idx, item in enumerate(self._cart_items):
             qty   = item.get("quantity", 1)
             rate  = item.get("item_rate", 0.0)
             total = qty * rate
             bg    = C["bg_card"] if idx % 2 == 0 else C["table_row_alt"]
 
-            row = ctk.CTkFrame(self._cart_frame, fg_color=bg, corner_radius=0)
-            row.pack(fill="x", padx=10)
+            row = ctk.CTkFrame(self._cart_frame, fg_color=bg, corner_radius=4)
+            row.pack(fill="x", padx=6, pady=2)
             row.grid_columnconfigure(1, weight=1)
 
+            # Index
             ctk.CTkLabel(row, text=str(idx + 1), font=F["body_xs"],
-                         text_color=C["text_muted"], width=30).grid(row=0, column=0, padx=6, pady=5, sticky="w")
-            garment_name = item.get("garment_type", "")
-            design_hint = item.get("design_instructions", "")
-            garment_display = garment_name
-            if design_hint:
-                garment_display += f"  ✦"
-            ctk.CTkLabel(row, text=garment_display, font=F["body_sm"],
-                         text_color=C["text_primary"], anchor="w").grid(row=0, column=1, padx=4, pady=5, sticky="ew")
-            ctk.CTkLabel(row, text=str(qty), font=F["body_xs"],
-                         text_color=C["text_secondary"], width=40).grid(row=0, column=2, padx=4, pady=5)
-            ctk.CTkLabel(row, text=f"₹{rate:,.0f}", font=F["body_xs"],
-                         text_color=C["text_secondary"], width=70).grid(row=0, column=3, padx=4, pady=5)
-            ctk.CTkLabel(row, text=f"₹{total:,.0f}", font=F["body_sm"],
-                         text_color=C["gold"], width=70).grid(row=0, column=4, padx=4, pady=5)
+                         text_color=C["text_muted"], width=24).grid(row=0, column=0, padx=4, pady=4, sticky="w")
 
-            i = idx  # capture for lambda
+            # Garment + Measurement summary
+            details_cell = ctk.CTkFrame(row, fg_color="transparent")
+            details_cell.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
+
+            garment_name = item.get("garment_type", "Custom")
+            meas_count = len(item.get("measurements", {}))
+            design_hint = item.get("design_instructions", "").strip()
+
+            g_lbl = ctk.CTkLabel(details_cell, text=garment_name, font=F["heading_sm"],
+                                 text_color=C["text_primary"], anchor="w")
+            g_lbl.pack(anchor="w")
+
+            sub_parts = []
+            if meas_count > 0:
+                sub_parts.append(f"✓ {meas_count} meas")
+            else:
+                sub_parts.append("no meas")
+            if design_hint:
+                sub_parts.append(f"✦ {design_hint[:24]}")
+
+            sub_text = "  |  ".join(sub_parts)
+            ctk.CTkLabel(details_cell, text=sub_text, font=F["body_xs"],
+                         text_color=C["status_delivered"] if meas_count else C["text_muted"],
+                         anchor="w").pack(anchor="w")
+
+            # Qty, Rate, Total
+            ctk.CTkLabel(row, text=str(qty), font=F["body_sm"],
+                         text_color=C["text_secondary"], width=32).grid(row=0, column=2, padx=4, pady=4)
+            ctk.CTkLabel(row, text=f"₹{rate:,.0f}", font=F["body_xs"],
+                         text_color=C["text_secondary"], width=55).grid(row=0, column=3, padx=4, pady=4, sticky="e")
+            ctk.CTkLabel(row, text=f"₹{total:,.0f}", font=F["body_sm"],
+                         text_color=C["gold"], width=55).grid(row=0, column=4, padx=4, pady=4, sticky="e")
+
+            # Actions cell: 📐 Edit Measurements, ✏️ Edit Item, ✕ Delete
+            act_cell = ctk.CTkFrame(row, fg_color="transparent")
+            act_cell.grid(row=0, column=5, padx=4, pady=4)
+
+            i = idx  # closure variable
+            # 📐 Meas button
             ctk.CTkButton(
-                row, text="✕", width=28, height=24,
+                act_cell, text="📐", width=26, height=24,
+                fg_color=C["primary"] if meas_count else C["btn_neutral"],
+                hover_color=C["primary_dark"],
+                text_color="#FFFFFF", font=("Segoe UI", 9),
+                command=lambda i=i: self._edit_cart_item_measurements(i),
+                corner_radius=4,
+            ).pack(side="left", padx=1)
+
+            # ✏️ Edit item button
+            ctk.CTkButton(
+                act_cell, text="✏️", width=26, height=24,
+                fg_color=C["btn_neutral"], hover_color=C["border_light"],
+                text_color=C["text_secondary"], font=("Segoe UI", 9),
+                command=lambda i=i: self._start_edit_cart_item(i),
+                corner_radius=4,
+            ).pack(side="left", padx=1)
+
+            # ✕ Remove item button
+            ctk.CTkButton(
+                act_cell, text="✕", width=24, height=24,
                 fg_color=C["btn_danger"], hover_color="#A00000",
                 text_color="#FFFFFF", font=("Segoe UI", 9, "bold"),
                 command=lambda i=i: self._remove_cart_item(i),
                 corner_radius=4,
-            ).grid(row=0, column=5, padx=6, pady=5)
+            ).pack(side="left", padx=1)
 
-        # Spacer
-        ctk.CTkFrame(self._cart_frame, fg_color="transparent", height=6).pack()
+        # Bottom space
+        ctk.CTkFrame(self._cart_frame, fg_color="transparent", height=4).pack()
 
     def _recalculate(self, *_):
         total = sum(
@@ -547,14 +740,29 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._advance_disp.configure(text=f"₹ {advance:,.2f}")
         self._balance_label.configure(text=f"₹ {balance:,.2f}")
 
-        # Auto-set payment status
-        if advance == 0:
-            ps = "Unpaid"
-        elif advance >= total:
-            ps = "Paid"
+        # Toggle Quick Settle button
+        if self._edit_order_id is not None and balance > 0:
+            self._quick_settle_btn.configure(text=f"  💰  Settle Remaining Balance (₹{balance:,.2f})")
+            self._quick_settle_btn.pack(fill="x", padx=10, pady=(0, 8))
         else:
-            ps = "Partial"
-        # (no need to call UI change; status is read at save time)
+            self._quick_settle_btn.pack_forget()
+
+    def _on_quick_settle_clicked(self):
+        """Open the payment settlement modal for the currently loaded order."""
+        if not self._edit_order_id:
+            return
+        order = db_manager.get_order_by_id(self._edit_order_id)
+        if not order:
+            return
+
+        from ui.components.payment_modal import PaymentModal
+
+        def on_settled(updated_order: Dict):
+            self.load_order_for_edit(self._edit_order_id)
+            if self.on_order_saved:
+                self.on_order_saved(self._edit_order_id)
+
+        PaymentModal(self.winfo_toplevel(), order=order, on_settled=on_settled)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Save / Update order
@@ -580,7 +788,7 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
             datetime.strptime(booking, "%Y-%m-%d")
             datetime.strptime(collection, "%Y-%m-%d")
         except ValueError:
-            raise ValueError("Dates must be in YYYY-MM-DD format.")
+            raise ValueError("Dates must be in YYYY-MM-DD format (use the 📅 calendar button).")
         if not self._cart_items:
             raise ValueError("Please add at least one garment item to the order.")
 
@@ -641,7 +849,7 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
                 notes=data["notes"],
                 items=data["items"],
             )
-            msg = f"Order #{order_id} created successfully!"
+            msg = f"Order #{order_id:05d} created successfully!"
         else:
             # UPDATE
             order_id = self._edit_order_id
@@ -659,21 +867,21 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
                 notes=data["notes"],
                 items=data["items"],
             )
-            msg = f"Order #{order_id} updated successfully!"
+            msg = f"Order #{order_id:05d} updated successfully!"
 
-        # Generate and open PDF
+        # Generate & open PDF invoice
         try:
             from services.pdf_service import generate_invoice, open_pdf
-            order_record = db_manager.get_order_by_id(order_id)
-            items_record = db_manager.get_order_items(order_id)
+            order_record    = db_manager.get_order_by_id(order_id)
+            items_records   = db_manager.get_order_items(order_id)
             customer_record = db_manager.get_customer_by_id(customer_id)
-            pdf_path = generate_invoice(order_record, items_record, customer_record)
+            pdf_path = generate_invoice(order_record, items_records, customer_record)
             open_pdf(pdf_path)
-        except Exception as e:
+        except Exception as exc:
             messagebox.showwarning(
                 "PDF Warning",
-                f"Order saved, but PDF generation failed:\n{e}",
-                parent=self.winfo_toplevel()
+                f"Order was saved, but invoice could not be generated:\n{exc}",
+                parent=self.winfo_toplevel(),
             )
 
         messagebox.showinfo("Success", msg, parent=self.winfo_toplevel())
@@ -700,8 +908,8 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
 
         # Mode label
         self._mode_label.configure(text="  ✏️  Edit Order")
-        self._order_badge.configure(text=f"Order #{order_id}")
-        self._save_btn.configure(text=f"  💾  Update Order #{order_id}")
+        self._order_badge.configure(text=f"Order #{order_id:05d}")
+        self._save_btn.configure(text=f"  💾  Update Order #{order_id:05d}")
 
         # Customer info
         self._mobile_var.set(order.get("mobile", ""))
@@ -729,12 +937,12 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
                 except Exception:
                     meas = {}
             self._cart_items.append({
-                "garment_type":       item.get("garment_type", "Custom"),
-                "quantity":           item.get("quantity", 1),
-                "item_rate":          item.get("item_rate", 0.0),
-                "measurements":       meas,
-                "measurements_json":  item.get("measurements_json", "{}"),
-                "design_instructions":item.get("design_instructions", ""),
+                "garment_type":        item.get("garment_type", "Custom"),
+                "quantity":            item.get("quantity", 1),
+                "item_rate":           item.get("item_rate", 0.0),
+                "measurements":        meas,
+                "measurements_json":   item.get("measurements_json", "{}"),
+                "design_instructions": item.get("design_instructions", ""),
             })
         self._refresh_cart_display()
 
@@ -760,11 +968,14 @@ class OrderEntryPanel(ctk.CTkScrollableFrame):
         self._customer_id = None
         self._current_measurements = {}
         self._current_design = ""
+        self._editing_cart_index = None
 
         # Reset labels
         self._mode_label.configure(text="  ✂️  New Order")
         self._order_badge.configure(text="")
         self._save_btn.configure(text="  💾  Save & Print Invoice")
+        self._quick_settle_btn.pack_forget()
+        self._cancel_item_edit_btn.pack_forget()
 
         # Clear fields
         self._mobile_var.set("")

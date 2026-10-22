@@ -25,8 +25,8 @@ class AjithaTailorsApp(ctk.CTk):
     """
 
     APP_TITLE   = "Ajitha Tailors — Billing & Order ERP"
-    MIN_WIDTH   = 1200
-    MIN_HEIGHT  = 750
+    MIN_WIDTH   = 980
+    MIN_HEIGHT  = 620
 
     def __init__(self):
         apply_theme()
@@ -51,12 +51,15 @@ class AjithaTailorsApp(ctk.CTk):
         self.update_idletasks()
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
-        w  = min(1440, sw - 80)
-        h  = min(900, sh - 80)
-        x  = (sw - w) // 2
-        y  = (sh - h) // 2
+        w  = min(1440, max(self.MIN_WIDTH, sw - 40))
+        h  = min(880, max(self.MIN_HEIGHT, sh - 60))
+        x  = max(0, (sw - w) // 2)
+        y  = max(0, (sh - h) // 2)
         self.geometry(f"{w}x{h}+{x}+{y}")
-        self.state("zoomed")   # Maximise on Windows
+        try:
+            self.state("zoomed")   # Maximise on Windows
+        except Exception:
+            pass
 
         # Window icon
         icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.ico")
@@ -80,31 +83,31 @@ class AjithaTailorsApp(ctk.CTk):
     def _build_header(self):
         C, F = COLORS, FONTS
 
-        header = ctk.CTkFrame(self, fg_color=C["bg_medium"], corner_radius=0, height=64)
+        header = ctk.CTkFrame(self, fg_color=C["bg_medium"], corner_radius=0, height=58)
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
         # Left: branding
         brand_frame = ctk.CTkFrame(header, fg_color="transparent")
-        brand_frame.pack(side="left", padx=18, pady=10)
+        brand_frame.pack(side="left", padx=16, pady=8)
 
         ctk.CTkLabel(
             brand_frame,
             text="✂️  AJITHA TAILORS",
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", 16, "bold"),
             text_color=C["primary"],
         ).pack(side="left")
 
         ctk.CTkLabel(
             brand_frame,
-            text=" — Billing & Order ERP",
-            font=F["body_md"],
+            text=" — Billing ERP",
+            font=F["body_sm"],
             text_color=C["text_muted"],
-        ).pack(side="left", pady=4)
+        ).pack(side="left", pady=2)
 
         # Right: clock + date
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
-        right_frame.pack(side="right", padx=18)
+        right_frame.pack(side="right", padx=16)
 
         self._clock_label = ctk.CTkLabel(
             right_frame,
@@ -122,9 +125,9 @@ class AjithaTailorsApp(ctk.CTk):
         )
         self._date_label.pack(anchor="e")
 
-        # Centre: quick-action buttons
+        # Centre: quick-action buttons & responsive view switcher
         centre_frame = ctk.CTkFrame(header, fg_color="transparent")
-        centre_frame.pack(side="left", padx=20, expand=True)
+        centre_frame.pack(side="left", padx=14, expand=True)
 
         ctk.CTkButton(
             centre_frame,
@@ -133,11 +136,11 @@ class AjithaTailorsApp(ctk.CTk):
             hover_color=C["primary_dark"],
             text_color="#FFFFFF",
             font=F["body_md"],
-            height=36,
-            width=130,
+            height=34,
+            width=120,
             command=self._new_order,
-            corner_radius=8,
-        ).pack(side="left", padx=5)
+            corner_radius=6,
+        ).pack(side="left", padx=4)
 
         ctk.CTkButton(
             centre_frame,
@@ -146,11 +149,28 @@ class AjithaTailorsApp(ctk.CTk):
             hover_color=C["border_light"],
             text_color=C["text_secondary"],
             font=F["body_md"],
-            height=36,
-            width=110,
+            height=34,
+            width=95,
             command=self._refresh_all,
-            corner_radius=8,
-        ).pack(side="left", padx=5)
+            corner_radius=6,
+        ).pack(side="left", padx=4)
+
+        # Responsive layout mode switcher
+        self._view_seg = ctk.CTkSegmentedButton(
+            centre_frame,
+            values=["◫ Split View", "📝 Order Form", "📊 Dashboard"],
+            command=self._on_view_changed,
+            fg_color=C["bg_input"],
+            selected_color=C["primary"],
+            selected_hover_color=C["primary_dark"],
+            unselected_color=C["bg_input"],
+            unselected_hover_color=C["border_light"],
+            text_color="#FFFFFF",
+            font=F["body_xs"],
+            height=32,
+        )
+        self._view_seg.set("◫ Split View")
+        self._view_seg.pack(side="left", padx=12)
 
         # Divider
         ctk.CTkFrame(self, fg_color=C["primary"], height=2).pack(fill="x")
@@ -165,61 +185,61 @@ class AjithaTailorsApp(ctk.CTk):
         # Outer container
         self._main_pane = ctk.CTkFrame(self, fg_color="transparent")
         self._main_pane.pack(fill="both", expand=True)
-        self._main_pane.grid_columnconfigure(0, weight=40)
-        self._main_pane.grid_columnconfigure(1, weight=60)
+        # Generous minsize for Order Entry (490px) ensures no horizontal clipping
+        self._main_pane.grid_columnconfigure(0, weight=42, minsize=490)
+        self._main_pane.grid_columnconfigure(1, weight=58, minsize=490)
         self._main_pane.grid_rowconfigure(0, weight=1)
 
         # ── Left pane — Order Entry ──────────────────────────────────────────
-        left_outer = ctk.CTkFrame(
+        self._left_outer = ctk.CTkFrame(
             self._main_pane,
             fg_color=C["bg_dark"],
             corner_radius=0,
         )
-        left_outer.grid(row=0, column=0, sticky="nsew")
+        self._left_outer.grid(row=0, column=0, sticky="nsew")
 
         # Left pane title bar
-        left_title = ctk.CTkFrame(left_outer, fg_color=C["bg_sidebar"], corner_radius=0, height=40)
+        left_title = ctk.CTkFrame(self._left_outer, fg_color=C["bg_sidebar"], corner_radius=0, height=36)
         left_title.pack(fill="x")
         left_title.pack_propagate(False)
         ctk.CTkLabel(
             left_title,
-            text="  📝  Order Entry",
+            text="  📝  Order Entry & Billing",
             font=FONTS["heading_sm"],
             text_color=COLORS["text_secondary"],
-        ).pack(side="left", padx=14, pady=10)
+        ).pack(side="left", padx=12, pady=8)
 
         self._order_entry = OrderEntryPanel(
-            left_outer,
+            self._left_outer,
             on_order_saved=self._on_order_saved,
         )
         self._order_entry.pack(fill="both", expand=True)
 
         # Thin vertical separator
-        ctk.CTkFrame(self._main_pane, fg_color=C["border"], width=2).grid(
-            row=0, column=0, sticky="nse"
-        )
+        self._separator = ctk.CTkFrame(self._main_pane, fg_color=C["border"], width=2)
+        self._separator.grid(row=0, column=0, sticky="nse")
 
         # ── Right pane — Dashboard ───────────────────────────────────────────
-        right_outer = ctk.CTkFrame(
+        self._right_outer = ctk.CTkFrame(
             self._main_pane,
             fg_color=C["bg_darkest"],
             corner_radius=0,
         )
-        right_outer.grid(row=0, column=1, sticky="nsew")
+        self._right_outer.grid(row=0, column=1, sticky="nsew")
 
         # Right pane title bar
-        right_title = ctk.CTkFrame(right_outer, fg_color=C["bg_sidebar"], corner_radius=0, height=40)
+        right_title = ctk.CTkFrame(self._right_outer, fg_color=C["bg_sidebar"], corner_radius=0, height=36)
         right_title.pack(fill="x")
         right_title.pack_propagate(False)
         ctk.CTkLabel(
             right_title,
-            text="  📊  Order Dashboard",
+            text="  📊  Order Dashboard & Accounts",
             font=FONTS["heading_sm"],
             text_color=COLORS["text_secondary"],
-        ).pack(side="left", padx=14, pady=10)
+        ).pack(side="left", padx=12, pady=8)
 
         self._dashboard = DashboardPanel(
-            right_outer,
+            self._right_outer,
             on_edit_order=self._on_edit_order,
         )
         self._dashboard.pack(fill="both", expand=True)
@@ -239,10 +259,35 @@ class AjithaTailorsApp(ctk.CTk):
 
         ctk.CTkLabel(
             status_bar,
-            text="Ajitha Tailors ERP v1.0  |  SQLite  |  Offline-First",
+            text="Ajitha Tailors ERP v1.1  |  SQLite  |  Offline-First",
             font=FONTS["label"],
             text_color=COLORS["text_muted"],
         ).pack(side="right", padx=12)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Responsive view mode switcher
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _on_view_changed(self, mode: str):
+        """Switch between Split View, Full Order Form, and Full Dashboard."""
+        if mode == "📝 Order Form":
+            self._right_outer.grid_remove()
+            self._separator.grid_remove()
+            self._left_outer.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self._main_pane.grid_columnconfigure(0, weight=1, minsize=0)
+            self._main_pane.grid_columnconfigure(1, weight=0, minsize=0)
+        elif mode == "📊 Dashboard":
+            self._left_outer.grid_remove()
+            self._separator.grid_remove()
+            self._right_outer.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self._main_pane.grid_columnconfigure(0, weight=1, minsize=0)
+            self._main_pane.grid_columnconfigure(1, weight=0, minsize=0)
+        else:  # "◫ Split View"
+            self._left_outer.grid(row=0, column=0, columnspan=1, sticky="nsew")
+            self._separator.grid(row=0, column=0, sticky="nse")
+            self._right_outer.grid(row=0, column=1, columnspan=1, sticky="nsew")
+            self._main_pane.grid_columnconfigure(0, weight=42, minsize=490)
+            self._main_pane.grid_columnconfigure(1, weight=58, minsize=490)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Component wiring & event handlers
@@ -259,10 +304,16 @@ class AjithaTailorsApp(ctk.CTk):
 
     def _on_edit_order(self, order_id: int):
         """Called when dashboard requests an order to be loaded for editing."""
+        if self._view_seg.get() == "📊 Dashboard":
+            self._view_seg.set("◫ Split View")
+            self._on_view_changed("◫ Split View")
         self._order_entry.load_order_for_edit(order_id)
         self._set_status(f"  ✏️  Editing Order #{order_id}")
 
     def _new_order(self):
+        if self._view_seg.get() == "📊 Dashboard":
+            self._view_seg.set("◫ Split View")
+            self._on_view_changed("◫ Split View")
         self._order_entry.reset_form()
         self._set_status("  ✂️  New order form ready")
 
