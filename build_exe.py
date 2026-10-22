@@ -72,6 +72,13 @@ def build():
     pyinstaller = find_pyinstaller()
     base = Path(__file__).parent.resolve()
 
+    # Close any running instance to avoid Windows file-lock PermissionError
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/F", "/IM", f"{APP_NAME}.exe"], capture_output=True)
+        except Exception:
+            pass
+
     cmd = [
         pyinstaller,
         "--name", APP_NAME,
