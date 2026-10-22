@@ -73,7 +73,7 @@ def _unique_path(directory: str, filename: str) -> str:
 
 
 def _fmt_currency(value: float) -> str:
-    return f"\u20B9 {value:,.2f}"
+    return f"Rs. {value:,.2f}"
 
 
 def _measurements_summary(measurements_json: str) -> str:
@@ -242,7 +242,7 @@ def generate_invoice(
     s_words    = style(fontSize=8,  textColor=GRAY_MID, fontName="Helvetica-Oblique", leading=11)
 
     # ── Document setup ───────────────────────────────────────────────────
-    margin_h = 15 * mm
+    margin_h = 14 * mm
     doc = SimpleDocTemplate(
         pdf_path,
         pagesize=A4,
@@ -253,7 +253,7 @@ def generate_invoice(
     )
 
     story = []
-    W = A4[0] - 2 * margin_h   # usable width
+    W = A4[0] - 2 * margin_h   # usable width: exactly 182 mm
 
     # ── Invoice meta + customer info (two-column grid) ───────────────────
     invoice_date = datetime.now().strftime("%d-%b-%Y")
@@ -303,8 +303,8 @@ def generate_invoice(
             Paragraph("", s_value),
         ])
 
-    col_w = [30 * mm, 55 * mm, 30 * mm, 55 * mm]
-    meta_table = Table(meta_data, colWidths=col_w, hAlign="LEFT")
+    col_w = [30 * mm, 61 * mm, 30 * mm, 61 * mm]
+    meta_table = Table(meta_data, colWidths=col_w, hAlign="CENTER")
     meta_table.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, -1), colors.HexColor("#FAFAFA")),
         ("BOX",         (0, 0), (-1, -1), 0.5, GRAY_LIGHT),
@@ -324,7 +324,7 @@ def generate_invoice(
     )))
     story.append(HRFlowable(width="100%", thickness=1.5, color=BRAND_PRIMARY, spaceAfter=3))
 
-    item_header = ["#", "Garment", "Measurements & Notes", "Qty", "Rate (₹)", "Total (₹)"]
+    item_header = ["#", "Garment", "Measurements & Notes", "Qty", "Rate (Rs.)", "Total (Rs.)"]
     item_rows   = [item_header]
 
     subtotal = 0.0
@@ -350,8 +350,9 @@ def generate_invoice(
             Paragraph(f"{line_total:,.2f}", style(alignment=TA_RIGHT, fontSize=9, textColor=GRAY_DARK, fontName="Helvetica-Bold")),
         ])
 
-    col_widths = [10 * mm, 28 * mm, W - 10 - 28 - 16 - 22 - 22, 16 * mm, 22 * mm, 22 * mm]
-    items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
+    # Exact fit: 8 + 32 + 76 + 16 + 25 + 25 = 182 mm (equal to W)
+    col_widths = [8 * mm, 32 * mm, 76 * mm, 16 * mm, 25 * mm, 25 * mm]
+    items_table = Table(item_rows, colWidths=col_widths, repeatRows=1, hAlign="CENTER")
 
     row_count = len(item_rows)
     items_table.setStyle(TableStyle([
@@ -401,8 +402,8 @@ def generate_invoice(
 
     summary_table = Table(
         summary_data,
-        colWidths=[W - 60 * mm, 60 * mm],
-        hAlign="RIGHT",
+        colWidths=[W - 65 * mm, 65 * mm],
+        hAlign="CENTER",
     )
     summary_table.setStyle(TableStyle([
         ("TOPPADDING",    (0, 0), (-1, -1), 4),
